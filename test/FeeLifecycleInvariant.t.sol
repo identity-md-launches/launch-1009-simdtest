@@ -47,8 +47,11 @@ contract FeeLifecycleHandler is Test {
         if (!liquid) return;
         uint256 amount = bound(raw, 1, 1 ether);
         uint256 age = block.number - opened;
-        uint256 anti = amount * (age < 10 ? (10 - age) * 300 : 0) / 10_000;
-        uint256 growth = amount / 200;
+        uint256 antiRate = age < 10 ? (10 - age) * 300 : 0;
+        // Buys specify a gross input budget; sells specify the net output after both fees.
+        uint256 denominator = buy ? 10_000 : 10_000 - antiRate - 50;
+        uint256 anti = amount * antiRate / denominator;
+        uint256 growth = amount * 50 / denominator;
         bool zeroForOne = buy == hook.pairedIs0();
         BalanceDelta delta = router.swap(
             key,
@@ -141,6 +144,27 @@ contract FeeLifecycleInvariantTest is LaunchFixture {
         selectors[5] = handler.failedUnsettledSwap.selector;
         targetSelector(FuzzSelector(address(handler), selectors));
         targetContract(address(handler));
+    }
+
+    function test_ExactOutputFeeModelUsesGrossIMDThroughSweepAndDonation() public {
+        // At launch, a 10,000-wei gross pool output delivers 6,950 wei to the seller,
+        // reserving 3,000 wei for the vault and 50 wei for liquidity growth.
+        handler.trade(false, 6_950);
+        assertEq(hook.antiSnipePending(), 3_000);
+        assertEq(hook.pending(), 50);
+        invariant_FeesMatchIndependentModelAndAssetsAreConserved();
+        handler.sweep();
+        vm.warp(hook.lastBatch() + 3600);
+        handler.donate();
+        assertEq(hook.pending(), 25);
+        invariant_FeesMatchIndependentModelAndAssetsAreConserved();
+
+        // With anti-snipe expired, the same gross output delivers 9,950 wei.
+        vm.roll(opened + 10);
+        handler.trade(false, 9_950);
+        assertEq(hook.antiSnipePending(), 0);
+        assertEq(hook.pending(), 75);
+        invariant_FeesMatchIndependentModelAndAssetsAreConserved();
     }
 
     /// forge-config: default.invariant.runs = 256

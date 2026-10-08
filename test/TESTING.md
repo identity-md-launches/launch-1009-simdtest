@@ -26,6 +26,14 @@ hook's counters. Trades pause while the handler has removed liquidity; after red
 resume. Amount bounds keep this invariant's trades fully fillable; separate differential tests
 cover partial fills, and the original suite covers very large signed requests.
 
+The differential and lifecycle models charge both fees on gross IMD. For exact-output
+swaps, the net amount is grossed up using both fee rates before splitting the reserves.
+Partial-fill checks observe the trader's total IMD debit on buys and the control pool's
+pre-hook IMD output on sells. The deterministic lifecycle regression verifies that a
+10,000-wei gross output gives the opening-block seller 6,950 wei, the vault reserve 3,000
+wei, and the growth reserve 50 wei; after block ten the seller receives 9,950 wei and
+growth still receives 50 wei. It also checks conservation through sweep and donation.
+
 The local fixtures use the actual v4 `PoolManager` implementation and directly CREATE2-deployed
 hooks with mined permission bits. Only IMD is replaced with a standard ERC20 locally. The
 mainnet suite preserves deployed PoolManager and IMD code and checks chain ID, symbol, and
@@ -40,10 +48,17 @@ and PoolManager exist. It is skipped in the default offline run:
 forge test --fork-url "$MAINNET_RPC_URL" --fork-block-number "$MAINNET_BLOCK" --match-contract MainnetForkTest
 ```
 
-Live fork execution was unavailable during this assignment: both public RPC endpoints attempted
-returned HTTP 403. The fork additions compile, but their execution against mainnet remains
-unverified. A skipped fork is not reported as a passed integration test. No RPC credentials or
-new dependencies are included.
+The four mainnet tests passed at Ethereum block **26,146,014**, including 64 fuzz cases,
+using the deployed PoolManager and IMD. Reproduce the checked fork with:
+
+```sh
+FOUNDRY_OUT=test/scratch/out FOUNDRY_CACHE_PATH=test/scratch/cache forge test \
+  --fork-url https://ethereum-rpc.publicnode.com --fork-block-number 26146014 \
+  --no-storage-caching --match-contract MainnetForkTest
+```
+
+This fork check needs a reachable historical-state RPC; the default offline suite still
+reports it as skipped. No RPC credentials or new dependencies are included.
 
 No reproducible implementation defect was found by the added local checks. Administrative
 selector probes and the existing opcode scan cover the reviewed interfaces and runtime; they

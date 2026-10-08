@@ -45,23 +45,29 @@ abstract contract HookDifferentialBase is LaunchFixture {
 
     function _compare(bool buy, bool exactInput, uint256 amount, uint256 elapsed) internal {
         vm.roll(opened + elapsed);
-        uint256 antiRate = elapsed < 10 ? (10 - elapsed) * 300 : 0;
         uint256 anti;
         uint256 growth;
         SwapParams memory params = _params(buy, exactInput, amount);
-        // Specified IMD fees are included in the user's input budget or added to the
-        // pool output needed to deliver the user's requested net IMD.
-        if (buy == exactInput) {
-            anti = amount * antiRate / 10_000;
-            growth = amount / 200;
-            params.amountSpecified += int256(anti + growth);
-        }
-        BalanceDelta plain = router.swap(control, params);
-        if (buy != exactInput) {
-            int256 paired = _pairDelta(plain);
-            uint256 executed = uint256(paired < 0 ? -paired : paired);
-            anti = executed * antiRate / 10_000;
-            growth = executed / 200;
+        BalanceDelta plain;
+        {
+            uint256 antiRate = elapsed < 10 ? (10 - elapsed) * 300 : 0;
+            // Exact-output requests give net IMD (sells), or the core's IMD input (buys).
+            // Recover gross IMD using both rates before calculating the separate reserves.
+            uint256 denominator = exactInput ? 10_000 : 10_000 - antiRate - 50;
+            // Specified IMD fees are included in the user's input budget or added to the
+            // pool output needed to deliver the user's requested net IMD.
+            if (buy == exactInput) {
+                anti = amount * antiRate / denominator;
+                growth = amount * 50 / denominator;
+                params.amountSpecified += int256(anti + growth);
+            }
+            plain = router.swap(control, params);
+            if (buy != exactInput) {
+                int256 paired = _pairDelta(plain);
+                uint256 executed = uint256(paired < 0 ? -paired : paired);
+                anti = executed * antiRate / denominator;
+                growth = executed * 50 / denominator;
+            }
         }
         uint256 priorAnti = hook.antiSnipePending();
         uint256 priorGrowth = hook.pending();
@@ -108,7 +114,9 @@ abstract contract HookDifferentialBase is LaunchFixture {
         assertEq(
             hook.pairedIs0() ? taxed.amount1() : taxed.amount0(), hook.pairedIs0() ? plain.amount1() : plain.amount0()
         );
-        int256 basis = buy == exactInput ? _pairDelta(taxed) : _pairDelta(plain);
+        // Gross IMD is the trader's total debit on buys and the pool's pre-hook output
+        // on sells, regardless of which currency was specified in the request.
+        int256 basis = buy ? _pairDelta(taxed) : _pairDelta(plain);
         uint256 magnitude = uint256(basis < 0 ? -basis : basis);
         uint256 rate = elapsed < 10 ? (10 - elapsed) * 300 : 0;
         // Two floors in the specified-side partial-fill allocation can lose at most two wei.
