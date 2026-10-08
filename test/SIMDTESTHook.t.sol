@@ -239,13 +239,7 @@ contract SIMDTESTHookTest is LaunchFixture {
         BalanceDelta delta = router.swap(key, params);
         uint256 fees = hook.pending() + hook.antiSnipePending();
         int256 actual = _pairDelta(delta);
-        uint256 basis;
-        if (buy == exactInput) {
-            basis = uint256(actual < 0 ? -actual : actual);
-        } else {
-            actual += int256(fees);
-            basis = uint256(actual < 0 ? -actual : actual);
-        }
+        uint256 basis = buy ? uint256(-actual) : uint256(actual) + fees;
         assertLt(basis, 10_000 ether);
         assertApproxEqAbs(hook.antiSnipePending(), basis * hook.antiSnipeBps() / 10_000, 2);
         assertApproxEqAbs(hook.pending(), basis * 50 / 10_000, 2);

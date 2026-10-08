@@ -107,17 +107,15 @@ abstract contract LaunchFixture is Test {
         c.tokenDelta = hook.pairedIs0() ? int256(delta.amount1()) : int256(delta.amount0());
         assertEq(int256(IERC20(PAIR).balanceOf(address(this))) - int256(c.pairBefore), c.pairDelta);
         assertEq(int256(token.balanceOf(address(this))) - int256(c.tokenBefore), c.tokenDelta);
-        uint256 basis;
         if (buy == exactInput) {
-            basis = amount;
             assertEq(c.pairDelta, buy ? -int256(amount) : int256(amount));
         } else {
-            int256 raw = c.pairDelta + int256(c.anti + c.growth);
-            basis = uint256(raw < 0 ? -raw : raw);
             assertEq(c.tokenDelta, buy ? int256(amount) : -int256(amount));
         }
-        assertEq(c.anti, basis * (elapsed >= 10 ? 0 : (10 - elapsed) * 300) / 10_000);
-        assertEq(c.growth, basis * 50 / 10_000);
+        // Observe gross IMD from settlement, independently of swap mode or fee formula.
+        uint256 basis = buy ? uint256(-c.pairDelta) : uint256(c.pairDelta) + c.anti + c.growth;
+        assertApproxEqAbs(c.anti, basis * (elapsed >= 10 ? 0 : (10 - elapsed) * 300) / 10_000, 1);
+        assertApproxEqAbs(c.growth, basis * 50 / 10_000, 1);
         assertLt(c.anti + c.growth, basis * 35 / 100 + 1);
         if (buy) {
             assertLt(c.pairDelta, 0);

@@ -121,8 +121,7 @@ contract SIMDTESTHook is IUnlockCallback {
     {
         if (!_pairSpecified(params)) return (IHooks.beforeSwap.selector, toBeforeSwapDelta(0, 0), 0);
         uint256 requested = _abs(params.amountSpecified);
-        uint256 anti = FullMath.mulDiv(requested, antiSnipeBps(), BPS);
-        uint256 growth = FullMath.mulDiv(requested, GROWTH_BPS, BPS);
+        (uint256 anti, uint256 growth) = _fees(requested, params.amountSpecified > 0);
         uint256 fee = anti + growth;
         if (fee == 0) return (IHooks.beforeSwap.selector, toBeforeSwapDelta(0, 0), 0);
 
@@ -151,8 +150,19 @@ contract SIMDTESTHook is IUnlockCallback {
     {
         if (_pairSpecified(params)) return (IHooks.afterSwap.selector, 0);
         uint256 base = _abs(pairedIs0 ? int256(delta.amount0()) : int256(delta.amount1()));
-        uint256 fee = _accrue(base * antiSnipeBps() / BPS, base * GROWTH_BPS / BPS);
+        (uint256 anti, uint256 growth) = _fees(base, params.amountSpecified > 0);
+        uint256 fee = _accrue(anti, growth);
         return (IHooks.afterSwap.selector, int128(int256(fee)));
+    }
+
+    /// @dev Both rates apply to gross IMD: total input on buys, pre-fee output on sells.
+    /// Exact-output paths supply net IMD (core input on buys, trader output on sells),
+    /// so both reserves share the combined-rate gross-up denominator. Round each down.
+    function _fees(uint256 amount, bool exactOutput) private view returns (uint256 anti, uint256 growth) {
+        uint256 antiBps = antiSnipeBps();
+        uint256 denominator = exactOutput ? BPS - antiBps - GROWTH_BPS : BPS;
+        anti = FullMath.mulDiv(amount, antiBps, denominator);
+        growth = FullMath.mulDiv(amount, GROWTH_BPS, denominator);
     }
 
     /// @notice Anyone can redeem all accrued anti-snipe claims to the fixed vault.
