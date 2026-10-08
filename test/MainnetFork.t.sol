@@ -3,6 +3,10 @@ pragma solidity 0.8.26;
 import {LaunchFixture} from "./helpers/LaunchFixture.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SIMDTESTHook} from "src/SIMDTESTHook.sol";
+import {Pool} from "v4-core/src/libraries/Pool.sol";
+import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
+import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 
 /// @notice Opt-in with forge test --fork-url <RPC> --fork-block-number <block> --match-contract MainnetForkTest.
 /// No environment reads, RPC dependencies or synthetic mainnet contracts in the default run.
@@ -46,5 +50,51 @@ contract MainnetForkTest is LaunchFixture {
     /// forge-config: default.fuzz.runs = 64
     function testFuzz_ForkSwaps(bool buy, bool exactInput, uint96 raw, uint8 elapsed) public {
         _checkSwap(buy, exactInput, bound(raw, 1e8, 10 ether), bound(elapsed, 0, 20));
+    }
+
+    function testFork_FailedSwapAndPrematureBatchPreserveRealIMDClaims() public {
+        _checkSwap(true, true, 100 ether, 0);
+        uint256 anti = hook.antiSnipePending();
+        uint256 pending = hook.pending();
+        uint256 last = hook.lastBatch();
+        uint256 managerBalance = IERC20Metadata(PAIR).balanceOf(address(manager));
+        SwapParams memory params = _params(false, false, 10 ether);
+        vm.expectRevert(IPoolManager.CurrencyNotSettled.selector);
+        router.unsettledSwap(key, params);
+        assertEq(hook.antiSnipePending(), anti);
+        assertEq(hook.pending(), pending);
+        assertEq(IERC20Metadata(PAIR).balanceOf(address(manager)), managerBalance);
+        _assertSettled();
+        vm.warp(last + 3599);
+        vm.expectRevert(SIMDTESTHook.BatchTooSoon.selector);
+        hook.donateBatch();
+        assertEq(hook.lastBatch(), last);
+        assertEq(hook.pending(), pending);
+        vm.warp(last + 3600);
+        assertEq(hook.donateBatch(), pending / 2);
+        assertEq(hook.antiSnipePending(), anti);
+        _assertSettled();
+    }
+
+    function testFork_NoLiquidityFailureDoesNotFreezeSweepOrRetry() public {
+        _checkSwap(false, true, 100 ether, 0);
+        uint256 anti = hook.antiSnipePending();
+        uint256 pending = hook.pending();
+        uint256 last = hook.lastBatch();
+        router.liquidity(key, ModifyLiquidityParams(-600, 600, -int256(LIQUIDITY), bytes32(0)));
+        vm.warp(last + 3600);
+        vm.expectRevert(Pool.NoLiquidityToReceiveFees.selector);
+        hook.donateBatch();
+        assertEq(hook.pending(), pending);
+        assertEq(hook.lastBatch(), last);
+        uint256 vaultBefore = IERC20Metadata(PAIR).balanceOf(VAULT);
+        vm.prank(makeAddr("mainnet keeper"));
+        assertEq(hook.sweep(), anti);
+        assertEq(IERC20Metadata(PAIR).balanceOf(VAULT) - vaultBefore, anti);
+        _seed(-600, 600, LIQUIDITY);
+        assertEq(hook.donateBatch(), pending / 2);
+        BalanceDelta earned = router.liquidity(key, ModifyLiquidityParams(-600, 600, 0, bytes32(0)));
+        assertApproxEqAbs(uint256(_pairDelta(earned)), pending / 2, 1);
+        _assertSettled();
     }
 }
